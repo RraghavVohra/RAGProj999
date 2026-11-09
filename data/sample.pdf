@@ -1,0 +1,54 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Length 199 >>
+stream
+BT /F1 12 Tf 72 720 Td 16 TL (Page 1: Introduction to RAG) Tj T* (Retrieval-Augmented Generation combines a retriever with an LLM.) Tj T* (It lets the model answer using your own documents.) Tj T* ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 223 >>
+stream
+BT /F1 12 Tf 72 720 Td 16 TL (Page 2: Chunking) Tj T* (Documents are split into smaller pieces called chunks.) Tj T* (Chunking strategies include page-wise, character-wise,) Tj T* (recursive and semantic chunking.) Tj T* ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 161 >>
+stream
+BT /F1 12 Tf 72 720 Td 16 TL (Page 3: Retrieval) Tj T* (At query time, the most relevant chunks are retrieved) Tj T* (and passed to the LLM as context.) Tj T* ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000197 00000 n 
+0000000447 00000 n 
+0000000573 00000 n 
+0000000847 00000 n 
+0000000973 00000 n 
+0000001185 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+1311
+%%EOF

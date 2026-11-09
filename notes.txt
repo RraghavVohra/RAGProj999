@@ -1,0 +1,15 @@
+## dataclass
+
+## local embedding models
+
+
+## collection
+A design point to keep in mind: the two embedders produce vectors of different sizes (384 for MiniLM, 1536 for OpenAI).
+A single collection can only hold one size, and vectors from different models can't be compared anyway. 
+So we'll create one collection per embedding model, for example bain_minilm and bain_openai.
+
+## collection
+collection level isolation
+
+
+## hnsw
