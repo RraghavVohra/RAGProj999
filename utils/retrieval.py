@@ -25,6 +25,9 @@ class Retriever:
         return self.store.search(query_vector, top_k=self.top_k)
 
 
+    # def function2(self):
+    #     embedder = self.embedder
+
 # ---------------------------------------------------------------------------
 # Quick manual check (run from project root:  python -m utils.retrieval)
 # Needs the collection built first:            python -m utils.vector_store
@@ -42,7 +45,7 @@ if __name__ == "__main__":
     print(f"Searching collection '{store.collection.name}' ({store.count()} chunks)\n")
 
     questions = [
-        "who is Senior Operations Analyst"
+        "who is Senior Operations Analyst",
         "What are AI leaders doing differently from other companies?",
         "How much money is being invested in data centers?",
         "What is happening with quantum computing?",
