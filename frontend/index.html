@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ============================ TOP BAR ============================ -->
+  <header class="topbar">
+    <div class="brand"><span class="logo">◆</span> RAG Studio</div>
+
+    <nav class="steps" aria-label="Progress">
+      <span class="step active" id="stepConfig"><b>1</b> Configure</span>
+      <span class="step-line"></span>
+      <span class="step" id="stepChat"><b>2</b> Chat</span>
+    </nav>
+
+    <span class="status-pill" id="statusPill">Not built</span>
+  </header>
+
+  <main>
+
+    <!-- ===================== VIEW 1: CONFIGURATION ===================== -->
+    <section id="configView" class="view">
+      <div class="intro">
+        <h1>Set up your pipeline</h1>
+        <p>Upload documents, choose your settings, then start chatting.</p>
+      </div>
+
+      <form id="configForm" class="config" novalidate>
+
+        <!-- Documents -->
+        <section class="card">
+          <h2 class="card-title">Documents</h2>
+          <label class="dropzone" id="dropzone">
+            <input type="file" id="fileInput" accept=".pdf,application/pdf" multiple hidden>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/></svg>
+            <span><strong>Drop PDFs here</strong> or <span class="link">browse</span></span>
+          </label>
+          <ul class="file-list" id="fileList"></ul>
+        </section>
+
+        <!-- Settings: one row per pipeline stage -->
+        <section class="card">
+          <h2 class="card-title">Pipeline settings</h2>
+
+          <div class="row">
+            <div class="row-label">Chunking<small>How documents are split</small></div>
+            <div class="row-control">
+              <div class="segmented">
+                <label><input type="radio" name="chunking" value="page-wise" checked><span>Page-wise</span></label>
+                <label><input type="radio" name="chunking" value="character-wise"><span>Character</span></label>
+                <label title="Coming soon"><input type="radio" name="chunking" value="recursive" disabled><span>Recursive</span></label>
+                <label title="Coming soon"><input type="radio" name="chunking" value="semantic" disabled><span>Semantic</span></label>
+              </div>
+              <div class="inline-fields" id="charSettings" hidden>
+                <label>Size <input type="number" id="chunkSize" name="chunk_size" min="100" max="2000" step="50" value="200"></label>
+                <label>Overlap <input type="number" id="overlap" name="overlap" min="0" max="500" step="10" value="50"></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="row-label">Embedding<small>Turns chunks into vectors</small></div>
+            <div class="row-control">
+              <div class="segmented">
+                <label><input type="radio" name="embedding" value="text-embedding-3-small" checked><span>OpenAI small</span></label>
+                <label><input type="radio" name="embedding" value="all-MiniLM-L6-v2"><span>MiniLM (local)</span></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="row-label">Retrieve<small>Chunks fetched from ChromaDB</small></div>
+            <div class="row-control slider">
+              <input type="range" id="topK" name="top_k" min="1" max="20" step="1" value="10">
+              <output id="topKOut">10</output>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="row-label">Rerank<small>Cohere picks the best chunks</small></div>
+            <div class="row-control rerank">
+              <label class="switch">
+                <input type="checkbox" id="rerank" name="rerank" checked>
+                <span class="track" aria-hidden="true"></span>
+                <span class="sr-only">Enable reranking</span>
+              </label>
+              <label class="keep" id="rerankSettings">Keep best
+                <input type="number" id="topN" name="top_n" min="1" max="10" value="3">
+              </label>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="row-label">LLM<small>Writes the final answer</small></div>
+            <div class="row-control">
+              <select id="llm" name="llm">
+                <option value="gpt-5.6-luna" selected>gpt-5.6-luna</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <button type="button" class="btn primary block build" id="buildBtn" disabled>Build pipeline</button>
+        <p class="hint" id="buildHint">Upload at least one PDF to continue.</p>
+      </form>
+    </section>
+
+    <!-- ========================== VIEW 2: CHAT ========================== -->
+    <section id="chatView" class="view" hidden>
+      <div class="chat-layout">
+        <aside class="sidebar">
+          <div class="side-block">
+            <h4>Documents</h4>
+            <ul class="side-docs" id="sideDocs"></ul>
+          </div>
+          <div class="side-block">
+            <h4>Pipeline</h4>
+            <dl class="side-config" id="sideConfig"></dl>
+          </div>
+          <div class="side-actions">
+            <button type="button" class="btn ghost block" id="editConfigBtn">← Edit configuration</button>
+            <button type="button" class="btn ghost block" id="clearChatBtn">Clear chat</button>
+          </div>
+        </aside>
+
+        <div class="chat">
+          <div class="messages" id="messages">
+            <div class="empty" id="emptyState">
+              <div class="empty-logo">◆</div>
+              <h2>Ask anything about your documents</h2>
+              <p>Answers come only from your PDFs, with page citations.</p>
+              <div class="suggestions">
+                <button type="button" class="chip" data-q="What is this document about?">What is this document about?</button>
+                <button type="button" class="chip" data-q="Summarise the key findings.">Summarise the key findings.</button>
+                <button type="button" class="chip" data-q="What are AI leaders doing differently from other companies?">What are AI leaders doing differently?</button>
+              </div>
+            </div>
+          </div>
+
+          <form class="composer" id="composer">
+            <textarea id="question" rows="1" placeholder="Ask a question about your documents…" aria-label="Your question"></textarea>
+            <button type="submit" class="btn primary send" id="sendBtn" aria-label="Send">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+            </button>
+          </form>
+          <p class="composer-hint">Enter to send · Shift + Enter for a new line</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Build progress overlay -->
+  <div class="overlay" id="buildOverlay" hidden>
+    <div class="overlay-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h3>Building your pipeline</h3>
+      <ol class="progress" id="progressList"></ol>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

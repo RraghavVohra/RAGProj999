@@ -5,3 +5,6 @@ openai
 sentence-transformers
 chromadb
 cohere
+fastapi
+uvicorn
+python-multipart
