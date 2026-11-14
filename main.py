@@ -3,14 +3,14 @@ Backend API for our modular RAG pipeline (built with FastAPI).
 
 The frontend (frontend/index.html) talks to these endpoints:
     GET  /api/health    -> is the server alive?
-    POST /api/pipeline  -> upload PDFs + settings, build the pipeline   (batch 4)
-    POST /api/chat      -> ask a question, get an answer + sources      (batch 5)
+    POST /api/pipeline  -> upload PDFs + settings, build the pipeline
+    POST /api/chat      -> ask a question, get an answer + sources
 
 Run from the project root:
     python main.py
 Then open:
-    http://localhost:8000          -> the frontend
-    http://localhost:8000/docs     -> FastAPI's automatic API docs (try endpoints in the browser)
+    http://localhost:8002          -> the frontend
+    http://localhost:8002/docs     -> FastAPI's automatic API docs (try endpoints in the browser)
 """
 
 import shutil
@@ -20,7 +20,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from utils.pipeline import PipelineConfig, RAGPipeline
 
@@ -71,7 +71,9 @@ def create_pipeline(
     try:
         pipeline_config = PipelineConfig.model_validate_json(config)
     except ValidationError as error:
-        raise HTTPException(status_code=422, detail=f"Invalid config: {error}")
+        # turn Pydantic's long report into one short line, e.g. "chunking.chunk_size: Input should be >= 50"
+        problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
+        raise HTTPException(status_code=422, detail="Invalid config - " + "; ".join(problems))
 
     for file in files:
         if not file.filename.lower().endswith(".pdf"):
@@ -114,6 +116,44 @@ def delete_pipeline(pipeline_id: str) -> None:
     pipeline.store.client.delete_collection(pipeline.store.collection.name)
     shutil.rmtree(UPLOAD_DIR / pipeline_id, ignore_errors=True)
     print(f"[pipeline] deleted old pipeline {pipeline_id}")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 3: ask a question to a built pipeline
+#
+# The frontend sends JSON:  {"pipeline_id": "3f9a1c2e", "question": "..."}
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    """Shape of the JSON body. FastAPI reads + checks it for us (like PipelineConfig)."""
+    pipeline_id: str
+    question: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/chat")
+def chat(request: ChatRequest):
+    # 1. Find the pipeline that was built earlier ------------------------------
+    pipeline = pipelines.get(request.pipeline_id)
+    if pipeline is None:
+        # happens after a server restart: the pipelines dict lives in memory only
+        raise HTTPException(
+            status_code=404,
+            detail="Pipeline not found (the server may have restarted). Go back to the configuration and build it again.",
+        )
+
+    # 2. Run the RAG flow: retrieve -> rerank -> generate ----------------------
+    print(f"[chat] {pipeline.id} Q: {request.question}")
+    try:
+        result = pipeline.ask(request.question)
+    except Exception as error:   # OpenAI / Cohere problems: bad key, rate limit, no internet...
+        print(f"[chat] failed: {error!r}")
+        raise HTTPException(status_code=502, detail=f"The pipeline failed: {error}")
+
+    pages = [source["page"] for source in result["sources"]]
+    print(f"[chat] answered using pages {pages}")
+
+    # 3. {"answer": "...", "sources": [...]} - exactly what the frontend expects
+    return result
 
 
 # ---------------------------------------------------------------------------

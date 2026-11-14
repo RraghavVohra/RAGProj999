@@ -9,8 +9,16 @@
    ===================================================================== */
 
 // ---------- 1. Settings ----------
-const API_BASE = "http://localhost:8000";
-const USE_MOCK = true;   // true = fake responses (no backend needed yet). Set to false once the backend runs.
+// Where the backend lives:
+//  - page served by the backend (http://localhost:8002) -> "" = same server, so the port never matters
+//  - index.html opened by double-click (file://)        -> must spell out the backend address
+const API_BASE = location.protocol === "file:" ? "http://localhost:8002" : "";
+
+// Which endpoints are still faked. Flip one to false as soon as its backend endpoint exists.
+const MOCK = {
+  build: false,   // POST /api/pipeline  -> real backend
+  chat: false,    // POST /api/chat      -> real backend
+};
 
 const state = {
   files: [],          // the PDFs the user picked
@@ -24,20 +32,23 @@ const $ = (selector) => document.querySelector(selector);
 
 
 // ---------- 2. API ----------
-// Backend contract (we'll build this next):
-//   POST /api/pipeline  form-data: files[], config (JSON)  -> { pipeline_id, num_chunks }
+// Backend contract:
+//   POST /api/pipeline  form-data: files[], config (JSON)  -> { pipeline_id, num_chunks, documents }
 //   POST /api/chat      JSON: { pipeline_id, question }     -> { answer, sources: [{ source, page, text, score, rerank_score }] }
 const api = {
   async buildPipeline(files, config) {
-    if (USE_MOCK) return mockBuild(files);
+    if (MOCK.build) return mockBuild(files);
+
+    // FormData = the browser's format for uploading files (same as a <form> with a file input).
+    // Field names must match the FastAPI function:  files: list[UploadFile], config: str
     const body = new FormData();
-    files.forEach((file) => body.append("files", file));
-    body.append("config", JSON.stringify(config));
-    return request("/api/pipeline", { method: "POST", body });
+    files.forEach((file) => body.append("files", file));   // append "files" once per PDF -> a list on the backend
+    body.append("config", JSON.stringify(config));          // settings travel as one JSON string
+    return request("/api/pipeline", { method: "POST", body });   // no Content-Type header: the browser sets it
   },
 
   async ask(question) {
-    if (USE_MOCK) return mockAsk();
+    if (MOCK.chat) return mockAsk();
     return request("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -47,14 +58,29 @@ const api = {
 };
 
 async function request(path, options) {
-  const response = await fetch(API_BASE + path, options);
+  let response;
+  try {
+    response = await fetch(API_BASE + path, options);
+  } catch {
+    // fetch only throws when the server can't be reached at all
+    throw new Error("Can't reach the backend. Is `python main.py` running?");
+  }
+
   if (!response.ok) {
-    const text = await response.text();
-    let message = text;
-    try { message = JSON.parse(text).detail || text; } catch { /* plain-text error */ }
-    throw new Error(message || `Request failed (${response.status})`);
+    throw new Error(await errorMessage(response));
   }
   return response.json();
+}
+
+// FastAPI errors look like {"detail": "text"} or, for missing fields, {"detail": [{"msg": ...}, ...]}
+async function errorMessage(response) {
+  const text = await response.text();
+  try {
+    const detail = JSON.parse(text).detail;
+    if (Array.isArray(detail)) return detail.map((d) => `${d.loc?.at(-1)}: ${d.msg}`).join(", ");
+    if (detail) return detail;
+  } catch { /* not JSON - use the raw text */ }
+  return text || `Request failed (${response.status})`;
 }
 
 // Fake responses so the UI can be shown before the backend exists
