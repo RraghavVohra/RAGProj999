@@ -9,6 +9,10 @@ Why rerank?
   only run it on a small candidate list.
 
     retriever: top 10 (fast, rough)  -->  reranker: best 3 (slow, accurate)  -->  LLM
+
+Two kinds of reranker, same interface  rerank(question, chunks) -> best chunks:
+    CohereReranker        paid API, nothing to download
+    CrossEncoderReranker  open-source model from Hugging Face, free, runs locally
 """
 
 import os
@@ -51,7 +55,64 @@ class CohereReranker:
 
 
 # ---------------------------------------------------------------------------
+# Open-source reranker: a "cross-encoder" model from Hugging Face
+#
+# Same idea as Cohere: the model reads (question, chunk) TOGETHER and outputs
+# one relevance score. It's just running on your own machine.
+#
+#   cross-encoder/ms-marco-MiniLM-L-6-v2   22M params, very fast, English only
+#   BAAI/bge-reranker-base                 278M params, slower, clearly more accurate
+#   BAAI/bge-reranker-v2-m3                568M params, multilingual, best quality but slow on CPU
+# ---------------------------------------------------------------------------
+
+LOCAL_RERANKERS = [
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "BAAI/bge-reranker-base",
+    "BAAI/bge-reranker-v2-m3",
+]
+
+_loaded_cross_encoders = {}   # load each model once, reuse it for every pipeline
+
+
+def load_cross_encoder(model_name: str):
+    if model_name not in _loaded_cross_encoders:
+        from sentence_transformers import CrossEncoder
+        print(f"[reranking] loading {model_name} (first time downloads it from Hugging Face)")
+        _loaded_cross_encoders[model_name] = CrossEncoder(model_name, max_length=512)
+    return _loaded_cross_encoders[model_name]
+
+
+class CrossEncoderReranker:
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base", top_n: int = 3):
+        import torch
+        self.model_name = model_name
+        self.top_n = top_n
+        self.model = load_cross_encoder(model_name)
+        self.to_probability = torch.nn.Sigmoid()   # raw scores can be any number; sigmoid -> 0..1 like Cohere
+
+    def rerank(self, question: str, chunks: list[Chunk]) -> list[Chunk]:
+        if not chunks:
+            return []
+        pairs = [(question, chunk.text) for chunk in chunks]
+        scores = self.model.predict(pairs, activation_fn=self.to_probability, batch_size=16)
+
+        best_first = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)[:self.top_n]
+        return [
+            Chunk(text=chunks[i].text, metadata={**chunks[i].metadata, "rerank_score": round(float(scores[i]), 4)})
+            for i in best_first
+        ]
+
+
+def make_reranker(model_name: str, top_n: int):
+    """Pick the reranker class that matches the model name from the config."""
+    if model_name in LOCAL_RERANKERS:
+        return CrossEncoderReranker(model_name, top_n=top_n)
+    return CohereReranker(model_name, top_n=top_n)
+
+
+# ---------------------------------------------------------------------------
 # Quick manual check (run from project root:  python -m utils.reranking)
+# For a full Cohere vs open-source comparison:  python -m evals.compare_rerankers
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

@@ -5,9 +5,16 @@ An embedding turns text into a list of numbers (a vector). Texts with
 similar meaning get vectors that are close to each other, which is what
 lets us search by meaning later.
 
-Every embedder has the same method:   embed(texts) -> list of vectors
+Every embedder has the same two methods:
+    embed(texts)       -> list of vectors   (for the document chunks)
+    embed_query(text)  -> one vector        (for the user's question)
 So the pipeline can swap a local model for OpenAI (or anything else)
 without changing any other code.
+
+Why two methods? Some models (BGE, E5) were TRAINED with a short
+instruction in front of questions and/or passages. Leaving it out still
+"works" but gives noticeably worse retrieval. Keeping the two methods
+separate means each model gets exactly the prefix it expects.
 """
 
 import os
@@ -22,17 +29,69 @@ load_dotenv()   # reads OPENAI_API_KEY from the .env file in the project root
 
 
 # ---------------------------------------------------------------------------
+# Local models from Hugging Face (downloaded once, then run on your laptop)
+#
+#   dims       = numbers per vector (bigger = more detail, more storage)
+#   max_tokens = longer text is SILENTLY CUT OFF at this length
+#                (~4 characters per token, so 256 tokens = ~1000 characters)
+#   prefixes   = the instruction each model was trained with
+# ---------------------------------------------------------------------------
+
+LOCAL_MODELS = {
+    "all-MiniLM-L6-v2": {                       # tiny + fast, the classic baseline
+        "dims": 384, "max_tokens": 256,
+        "query_prefix": "", "doc_prefix": "",
+    },
+    "BAAI/bge-small-en-v1.5": {                 # same size as MiniLM, clearly better retrieval
+        "dims": 384, "max_tokens": 512,
+        "query_prefix": "Represent this sentence for searching relevant passages: ", "doc_prefix": "",
+    },
+    "BAAI/bge-base-en-v1.5": {                  # 2x bigger + slower, best quality of this list
+        "dims": 768, "max_tokens": 512,
+        "query_prefix": "Represent this sentence for searching relevant passages: ", "doc_prefix": "",
+    },
+    "intfloat/e5-base-v2": {                    # strong alternative, needs prefixes on BOTH sides
+        "dims": 768, "max_tokens": 512,
+        "query_prefix": "query: ", "doc_prefix": "passage: ",
+    },
+    "sentence-transformers/all-mpnet-base-v2": {  # older but solid general-purpose model
+        "dims": 768, "max_tokens": 384,
+        "query_prefix": "", "doc_prefix": "",
+    },
+}
+
+# Loading a model takes seconds (and the first time, a download).
+# Keep loaded models here so building a second pipeline is instant.
+_loaded_models = {}
+
+
+def load_sentence_transformer(model_name: str):
+    if model_name not in _loaded_models:
+        from sentence_transformers import SentenceTransformer   # imported here so OpenAI-only users don't need it
+        print(f"[embedding] loading {model_name} (first time downloads it from Hugging Face)")
+        _loaded_models[model_name] = SentenceTransformer(model_name)
+    return _loaded_models[model_name]
+
+
+# ---------------------------------------------------------------------------
 # Embedder 1: Local model (sentence-transformers) - free, runs on your laptop
 # ---------------------------------------------------------------------------
 
 class SentenceTransformerEmbedder:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        from sentence_transformers import SentenceTransformer   # imported here so OpenAI-only users don't need it
+        settings = LOCAL_MODELS.get(model_name, {})   # unknown model -> no prefixes
         self.model_name = model_name
-        self.model = SentenceTransformer(model_name)
+        self.query_prefix = settings.get("query_prefix", "")
+        self.doc_prefix = settings.get("doc_prefix", "")
+        self.model = load_sentence_transformer(model_name)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return self.model.encode(texts).tolist()
+        # normalize = every vector gets length 1, so cosine similarity is just a dot product
+        texts = [self.doc_prefix + text for text in texts]
+        return self.model.encode(texts, normalize_embeddings=True, batch_size=32).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.model.encode(self.query_prefix + text, normalize_embeddings=True).tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +106,9 @@ class OpenAIEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         response = self.client.embeddings.create(model=self.model_name, input=texts)
         return [item.embedding for item in response.data]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]   # OpenAI models need no prefix
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,8 @@ def build_context(chunks: list[Chunk]) -> str:
     """Join the retrieved chunks into one text block, each labelled with its source page."""
     blocks = []
     for chunk in chunks:
-        header = f"[Source: {chunk.metadata['source']}, page {chunk.metadata['page']}]"
+        kind = ", figure description" if chunk.metadata.get("type") == "figure" else ""   # from image parsing
+        header = f"[Source: {chunk.metadata['source']}, page {chunk.metadata['page']}{kind}]"
         blocks.append(f"{header}\n{chunk.text}")
     return "\n\n---\n\n".join(blocks)
 

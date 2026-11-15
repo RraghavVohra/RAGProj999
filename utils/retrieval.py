@@ -21,7 +21,7 @@ class Retriever:
         self.top_k = top_k
 
     def retrieve(self, question: str) -> list[Chunk]:
-        query_vector = self.embedder.embed([question])[0]   # embed() takes a list -> take the single vector
+        query_vector = self.embedder.embed_query(question)   # embed_query adds the model's question prefix (if any)
         return self.store.search(query_vector, top_k=self.top_k)
 
 

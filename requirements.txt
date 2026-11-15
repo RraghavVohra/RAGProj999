@@ -8,3 +8,4 @@ cohere
 fastapi
 uvicorn
 python-multipart
+pymupdf

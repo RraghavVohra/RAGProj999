@@ -113,14 +113,16 @@ function readConfig() {
   const form = $("#configForm");
   const data = new FormData(form);
   return {
+    images: { enabled: form.images.checked },
     chunking: {
       strategy: data.get("chunking"),
       chunk_size: Number(data.get("chunk_size")),
       overlap: Number(data.get("overlap")),
+      breakpoint_percentile: Number(data.get("breakpoint_percentile")),
     },
     embedding: { model: data.get("embedding") },
     retrieval: { top_k: Number(data.get("top_k")) },
-    reranking: { enabled: form.rerank.checked, model: "rerank-v3.5", top_n: Number(data.get("top_n")) },
+    reranking: { enabled: form.rerank.checked, model: form.rerank_model.value, top_n: Number(data.get("top_n")) },
     generation: { model: data.get("llm") },
   };
 }
@@ -181,8 +183,10 @@ function renderSummary() {
   const c = readConfig();
 
   $("#topKOut").textContent = c.retrieval.top_k;
-  $("#charSettings").hidden = c.chunking.strategy !== "character-wise";
+  $("#charSettings").hidden = !["character-wise", "recursive"].includes(c.chunking.strategy);
+  $("#semanticSettings").hidden = c.chunking.strategy !== "semantic";
   $("#topN").disabled = !c.reranking.enabled;
+  $("#rerankModel").disabled = !c.reranking.enabled;
   $("#rerankSettings").classList.toggle("off", !c.reranking.enabled);
 
   const n = state.files.length;
@@ -197,7 +201,7 @@ const BUILD_STEPS = ["Reading PDFs", "Chunking text", "Creating embeddings", "St
 
 async function buildPipeline() {
   const config = readConfig();
-  if (config.chunking.strategy === "character-wise" && config.chunking.overlap >= config.chunking.chunk_size) {
+  if (["character-wise", "recursive"].includes(config.chunking.strategy) && config.chunking.overlap >= config.chunking.chunk_size) {
     toast("Overlap must be smaller than the chunk size");
     return;
   }
@@ -222,6 +226,7 @@ async function buildPipeline() {
     items.forEach((li) => (li.className = "done"));
     await sleep(450);
 
+    clearChat();   // old answers came from the OLD pipeline - don't let them look like new ones
     state.config = config;
     state.pipelineId = result.pipeline_id;
     state.numChunks = result.num_chunks;
@@ -261,11 +266,12 @@ function renderSidebar() {
 
   const c = state.config;
   const rows = [
+    ["Images", c.images.enabled ? "on" : "off"],
     ["Chunking", c.chunking.strategy],
     ["Chunks", state.numChunks ?? "-"],
     ["Embedding", c.embedding.model],
     ["Retrieve", `top ${c.retrieval.top_k}`],
-    ["Rerank", c.reranking.enabled ? `best ${c.reranking.top_n}` : "off"],
+    ["Rerank", c.reranking.enabled ? `${c.reranking.model} · best ${c.reranking.top_n}` : "off"],
     ["LLM", c.generation.model],
   ];
   $("#sideConfig").innerHTML = rows.map(([key, value]) =>
@@ -312,7 +318,7 @@ function answerHtml({ answer, sources = [] }) {
     <li class="source">
       <div class="source-head">
         <span class="cite">p. ${escapeHtml(String(s.page))}</span>
-        <span class="source-name">${escapeHtml(s.source)}</span>
+        <span class="source-name">${escapeHtml(s.source)}${s.type === "figure" ? " · figure" : ""}</span>
         ${scoreHtml("vector", s.score)}
         ${scoreHtml("rerank", s.rerank_score)}
       </div>

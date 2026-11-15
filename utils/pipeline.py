@@ -12,10 +12,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from utils.chunking import Chunk, character_chunking, page_chunking
-from utils.embedding import OpenAIEmbedder, SentenceTransformerEmbedder, embed_chunks
+from utils.chunking import Chunk, character_chunking, page_chunking, recursive_chunking, semantic_chunking
+from utils.embedding import LOCAL_MODELS, OpenAIEmbedder, SentenceTransformerEmbedder, embed_chunks
 from utils.generation import Generator
-from utils.reranking import CohereReranker
+from utils.reranking import make_reranker
 from utils.retrieval import Retriever
 from utils.vector_store import VectorStore
 
@@ -30,13 +30,21 @@ from utils.vector_store import VectorStore
 # ---------------------------------------------------------------------------
 
 class ChunkingConfig(BaseModel):
-    strategy: Literal["page-wise", "character-wise"] = "page-wise"   # only these two values are allowed
+    strategy: Literal["page-wise", "character-wise", "recursive", "semantic"] = "page-wise"   # only these values are allowed
     chunk_size: int = Field(200, ge=50, le=5000)                     # ge = "greater or equal", le = "less or equal"
     overlap: int = Field(50, ge=0)
+    breakpoint_percentile: int = Field(90, ge=50, le=99)             # semantic only: cut at the top 10% topic jumps
 
 
 class EmbeddingConfig(BaseModel):
-    model: Literal["text-embedding-3-small", "all-MiniLM-L6-v2"] = "text-embedding-3-small"
+    model: Literal[
+        "text-embedding-3-small",                     # OpenAI (paid API)
+        "all-MiniLM-L6-v2",                           # the rest: local Hugging Face models (see utils/embedding.py)
+        "BAAI/bge-small-en-v1.5",
+        "BAAI/bge-base-en-v1.5",
+        "intfloat/e5-base-v2",
+        "sentence-transformers/all-mpnet-base-v2",
+    ] = "text-embedding-3-small"
 
 
 class RetrievalConfig(BaseModel):
@@ -45,8 +53,18 @@ class RetrievalConfig(BaseModel):
 
 class RerankingConfig(BaseModel):
     enabled: bool = True
-    model: str = "rerank-v3.5"
+    model: Literal[
+        "rerank-v3.5",                                # Cohere (paid API)
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",       # the rest: open-source, run locally (see utils/reranking.py)
+        "BAAI/bge-reranker-base",
+        "BAAI/bge-reranker-v2-m3",
+    ] = "rerank-v3.5"
     top_n: int = Field(3, ge=1, le=20)
+
+
+class ImagesConfig(BaseModel):
+    enabled: bool = False          # off by default: it costs one vision call per visual page (cached after the first build)
+    model: str = "gpt-5.6-luna"    # must be a vision-capable OpenAI model
 
 
 class GenerationConfig(BaseModel):
@@ -55,6 +73,7 @@ class GenerationConfig(BaseModel):
 
 class PipelineConfig(BaseModel):
     """The full set of settings = one object per stage. Every field has a default."""
+    images: ImagesConfig = Field(default_factory=ImagesConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
@@ -66,32 +85,50 @@ class PipelineConfig(BaseModel):
 # Chunking PDFs according to the config
 # ---------------------------------------------------------------------------
 
-def chunk_pdf(pdf_path: str | Path, chunking: ChunkingConfig) -> list[Chunk]:
-    """Split ONE PDF into chunks using the chosen strategy."""
-    pages = page_chunking(str(pdf_path))   # always start with pages: they know their page number + file name
-
+def split_pages(pages: list[Chunk], chunking: ChunkingConfig, embedder) -> list[Chunk]:
+    """Turn page chunks into the chunks of the chosen strategy."""
     if chunking.strategy == "page-wise":
         return pages
 
-    # Character-wise: split EACH PAGE separately, so every small piece still
-    # knows which page it came from (needed for "(page 5)" citations).
+    if chunking.strategy == "semantic":   # works across all pages at once (see utils/chunking.py)
+        return semantic_chunking(pages, embedder, chunking.breakpoint_percentile)
+
+    # Character-wise / recursive: split EACH PAGE separately, so every small
+    # piece still knows which page it came from (needed for "(page 5)" citations).
+    splitter = character_chunking if chunking.strategy == "character-wise" else recursive_chunking
     chunks = []
     for page in pages:
-        for piece in character_chunking(page.text, chunking.chunk_size, chunking.overlap):
-            piece.metadata.update(
-                page=page.metadata["page"],
-                source=page.metadata["source"],
-                chunk_id=len(chunks),          # number chunks across the whole file, not per page
-            )
+        for piece in splitter(page.text, chunking.chunk_size, chunking.overlap):
+            piece.metadata.update(page=page.metadata["page"], source=page.metadata["source"])
             chunks.append(piece)
     return chunks
 
 
-def chunk_documents(pdf_paths: list[str | Path], chunking: ChunkingConfig) -> list[Chunk]:
+def chunk_pdf(pdf_path: str | Path, config: PipelineConfig, embedder) -> list[Chunk]:
+    """Split ONE PDF into chunks: text chunks (chosen strategy) + figure chunks (if image parsing is on)."""
+    pages = page_chunking(str(pdf_path))   # always start with pages: they know their page number + file name
+
+    figures = []
+    if config.images.enabled:
+        from utils.image_parsing import parse_visual_pages   # imported here: only needed when images are on
+        scanned_pages, figures = parse_visual_pages(pdf_path, config.images.model)
+        pages = sorted(pages + scanned_pages, key=lambda p: p.metadata["page"])   # scanned text joins normal text
+
+    chunks = split_pages(pages, config.chunking, embedder)
+    chunks += figures   # figure descriptions are kept whole: splitting a table in half helps nobody
+
+    for i, chunk in enumerate(chunks):   # number chunks across the whole file (ids in Chroma must be unique)
+        chunk.metadata["chunk_id"] = i
+        chunk.metadata["strategy"] = config.chunking.strategy
+        chunk.metadata.setdefault("type", "text")
+    return chunks
+
+
+def chunk_documents(pdf_paths: list[str | Path], config: PipelineConfig, embedder) -> list[Chunk]:
     """Chunk several PDFs and return all chunks in one list."""
     all_chunks = []
     for path in pdf_paths:
-        all_chunks.extend(chunk_pdf(path, chunking))
+        all_chunks.extend(chunk_pdf(path, config, embedder))
     return all_chunks
 
 
@@ -107,7 +144,7 @@ EMBED_BATCH_SIZE = 100   # embed 100 chunks per API call (big documents would ex
 
 def make_embedder(model_name: str):
     """Pick the embedder class that matches the model name from the config."""
-    if model_name == "all-MiniLM-L6-v2":
+    if model_name in LOCAL_MODELS:
         return SentenceTransformerEmbedder(model_name)
     return OpenAIEmbedder(model_name)
 
@@ -124,16 +161,16 @@ class RAGPipeline:
         self.store = VectorStore(f"pipeline_{self.id}")   # own collection: documents of different pipelines never mix
         self.retriever = Retriever(self.embedder, self.store, top_k=config.retrieval.top_k)
         self.reranker = (
-            CohereReranker(config.reranking.model, top_n=min(config.reranking.top_n, config.retrieval.top_k))
+            make_reranker(config.reranking.model, top_n=min(config.reranking.top_n, config.retrieval.top_k))
             if config.reranking.enabled else None    # None = "skip reranking"
         )
         self.generator = Generator(config.generation.model)
 
     def build(self, pdf_paths: list[str | Path]) -> int:
         """Chunk, embed and store the PDFs. Returns how many chunks were stored."""
-        chunks = chunk_documents(pdf_paths, self.config.chunking)
+        chunks = chunk_documents(pdf_paths, self.config, self.embedder)
         if not chunks:
-            raise ValueError("No text found in the PDFs (are they scanned images?)")
+            raise ValueError("No text found in the PDFs (are they scanned images? Turn on image parsing.)")
 
         for start in range(0, len(chunks), EMBED_BATCH_SIZE):
             batch = chunks[start:start + EMBED_BATCH_SIZE]
@@ -160,6 +197,7 @@ def to_source(chunk: Chunk) -> dict:
     return {
         "source": chunk.metadata.get("source"),
         "page": chunk.metadata.get("page"),
+        "type": chunk.metadata.get("type", "text"),          # "text" or "figure" (description of a chart/table)
         "text": chunk.text,
         "score": chunk.metadata.get("score"),                # vector similarity (retriever)
         "rerank_score": chunk.metadata.get("rerank_score"),  # None when reranking is off

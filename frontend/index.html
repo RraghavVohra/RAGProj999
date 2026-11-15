@@ -56,23 +56,42 @@
               <div class="segmented">
                 <label><input type="radio" name="chunking" value="page-wise" checked><span>Page-wise</span></label>
                 <label><input type="radio" name="chunking" value="character-wise"><span>Character</span></label>
-                <label title="Coming soon"><input type="radio" name="chunking" value="recursive" disabled><span>Recursive</span></label>
-                <label title="Coming soon"><input type="radio" name="chunking" value="semantic" disabled><span>Semantic</span></label>
+                <label title="Splits at paragraphs, then lines, sentences, words"><input type="radio" name="chunking" value="recursive"><span>Recursive</span></label>
+                <label title="Splits where the topic changes (uses the embedding model)"><input type="radio" name="chunking" value="semantic"><span>Semantic</span></label>
               </div>
               <div class="inline-fields" id="charSettings" hidden>
-                <label>Size <input type="number" id="chunkSize" name="chunk_size" min="100" max="2000" step="50" value="200"></label>
+                <label>Size <input type="number" id="chunkSize" name="chunk_size" min="100" max="2000" step="50" value="500"></label>
                 <label>Overlap <input type="number" id="overlap" name="overlap" min="0" max="500" step="10" value="50"></label>
               </div>
+              <div class="inline-fields" id="semanticSettings" hidden>
+                <label title="Cut at the biggest topic jumps. Lower = more, smaller chunks">Breakpoint percentile
+                  <input type="number" id="percentile" name="breakpoint_percentile" min="50" max="99" step="1" value="90"></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="row-label">Images<small>Describe charts &amp; tables with a vision model</small></div>
+            <div class="row-control">
+              <label class="switch">
+                <input type="checkbox" id="images" name="images">
+                <span class="track" aria-hidden="true"></span>
+                <span class="sr-only">Enable image parsing</span>
+              </label>
             </div>
           </div>
 
           <div class="row">
             <div class="row-label">Embedding<small>Turns chunks into vectors</small></div>
             <div class="row-control">
-              <div class="segmented">
-                <label><input type="radio" name="embedding" value="text-embedding-3-small" checked><span>OpenAI small</span></label>
-                <label><input type="radio" name="embedding" value="all-MiniLM-L6-v2"><span>MiniLM (local)</span></label>
-              </div>
+              <select id="embedding" name="embedding">
+                <option value="text-embedding-3-small" selected>OpenAI text-embedding-3-small (API)</option>
+                <option value="all-MiniLM-L6-v2">MiniLM-L6 · 384d · fastest (local)</option>
+                <option value="BAAI/bge-small-en-v1.5">BGE small · 384d (local)</option>
+                <option value="BAAI/bge-base-en-v1.5">BGE base · 768d · best local (local)</option>
+                <option value="intfloat/e5-base-v2">E5 base · 768d (local)</option>
+                <option value="sentence-transformers/all-mpnet-base-v2">MPNet base · 768d (local)</option>
+              </select>
             </div>
           </div>
 
@@ -85,13 +104,19 @@
           </div>
 
           <div class="row">
-            <div class="row-label">Rerank<small>Cohere picks the best chunks</small></div>
+            <div class="row-label">Rerank<small>Re-scores chunks, keeps the best</small></div>
             <div class="row-control rerank">
               <label class="switch">
                 <input type="checkbox" id="rerank" name="rerank" checked>
                 <span class="track" aria-hidden="true"></span>
                 <span class="sr-only">Enable reranking</span>
               </label>
+              <select id="rerankModel" name="rerank_model" aria-label="Reranker model">
+                <option value="rerank-v3.5" selected>Cohere rerank-v3.5 (API)</option>
+                <option value="cross-encoder/ms-marco-MiniLM-L-6-v2">MS MARCO MiniLM · fast (local)</option>
+                <option value="BAAI/bge-reranker-base">BGE reranker base (local)</option>
+                <option value="BAAI/bge-reranker-v2-m3">BGE reranker v2-m3 · slow (local)</option>
+              </select>
               <label class="keep" id="rerankSettings">Keep best
                 <input type="number" id="topN" name="top_n" min="1" max="10" value="3">
               </label>

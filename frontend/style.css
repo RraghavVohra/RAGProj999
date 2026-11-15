@@ -197,7 +197,8 @@ select {
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(18px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
-.keep.off { opacity: .4; }
+.keep.off, select:disabled { opacity: .4; }
+select { max-width: 100%; }
 
 .build { padding: 14px; font-size: 15px; margin-top: 8px; }
 .hint { font-size: 13px; color: var(--faint); text-align: center; }
