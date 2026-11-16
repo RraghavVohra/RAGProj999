@@ -144,15 +144,76 @@ OTHER WAYS (not used here)
 - local vision models (e.g. Qwen2-VL, Florence-2 via Hugging Face): free, but slow without a GPU
 - layout parsers (Docling, Unstructured, LlamaParse): detect tables/figures as separate elements
 
+## chunking  (utils/chunking.py)
+
+FIXES
+Fix 1 - dot leaders made 5-character chunks  (split_sentences)
+  Problem : semantic chunking splits text into sentences at every ". " (dot + space).
+            The table of contents has "dot leaders":  "Quantum Computing . . . . . . 41"
+            -> every ". " looked like a sentence end -> useless chunks like ". .68" (5 chars)
+  Fix     : before splitting, replace 3 or more dots with one "…" (not a normal dot, so no split there)
+              text = re.sub(r"(?:\.\s?){3,}", "… ", text)
+  Example : "Quantum Computing . . . . . . 41"  ->  "Quantum Computing … 41"  (stays one piece)
+
+Fix 2 - tiny leftover chunks  (semantic_chunking -> close_chunk)
+  Problem : a chunk is closed when (1) the topic changes, (2) it gets too long (>1500), (3) a new page starts.
+            min_chunk_size (200) was only checked for (1). So after a "too long" cut, a short leftover
+            like "See Figure 3." became its own chunk -> no meaning, wastes a top-3 slot.
+  Fix     : when closing a chunk shorter than 200 chars, glue it onto the PREVIOUS chunk if it's on the SAME page
+              if len(text) < min_chunk_size and chunks and chunks[-1].metadata["page"] == page:
+                  chunks[-1].text += " " + text
+                  return
+  Example : chunk A (1450 chars) + chunk B "See Figure 3." (13 chars)  ->  chunk A (1464 chars)
+  Limits  : - never glued across pages (citation page would be wrong) -> cover page (59) and last page (40) stay small
+            - a merged chunk can go up to ~199 chars over the 1500 max (better than a useless tiny chunk)
+
+Result of fix 1 + 2  (python -m evals.chunking_demo, semantic, percentile 90, MiniLM)
+            before   after
+  min          5      40     <- tiny chunks gone; 40 = last page "visit www.bain.com" (a whole page, can't merge)
+  chunks     162     144     <- 18 tiny pieces glued onto their neighbours
+  avg        831     927
+  max       1498    1598     <- expected: merging can go up to 199 over the 1500 max
+
+Fix 3 - semantic chunks were bigger than MiniLM can read  (semantic_max_chunk_size)
+  Problem : max chunk size was a fixed 1500 chars (1598 after fix 2), but MiniLM reads only
+            256 tokens (~1000 chars) -> the end of every long chunk was invisible to search.
+  Fix     : let the embedding model decide (option C; A = lower it for everyone, B = a setting in the app)
+            - every embedder now has  max_tokens  (MiniLM 256, BGE 512, OpenAI 8191)
+            - max chunk size = smaller of (1500, max_tokens x 4 chars - 200 margin for fix-2 merges)
+  Example : MiniLM : 256 x 4 = 1024 - 200 = 824 chars
+            BGE    : 512 x 4 = 2048 - 200 = 1848 -> capped at 1500 (bigger chunks mix too many topics)
+            OpenAI : capped at 1500
+  Check   : "4 chars per token" is only an estimate -> Part 5 of the demo counts the REAL tokens
+  Result  : (percentile 90, MiniLM)  chunks 144 -> 218, avg 927 -> 612, max 1598 -> 1410
+            216 of 218 chunks now fit completely. 2 chunks are still cut off (p18: 285 tokens, p53: 343 tokens).
+  Known issue (left as is for now):
+            both are CHART text with no full stops ("7K 6K 0 1K 2K 3K 4,460 18% 2020 ...") -> the sentence
+            splitter sees one 1000+ char "sentence", and semantic chunking only cuts BETWEEN sentences.
+            Also number-heavy text is ~3.6 chars/token, so "4 chars per token" is too optimistic there.
+            Possible fix 4: cut over-long sentences with recursive chunking + use 3 chars/token.
+
+Is this the right way?
+  Yes for the method: measure (min = 5) -> look at the actual bad chunks -> fix the real cause.
+  Fix 2 is standard (LangChain's SemanticChunker also has a minimum size).
+  But fix 1 is a patch for this PDF. Two weaknesses remain:
+    - our sentence splitter is basic: it also splits wrongly on "e.g. " or "U.S. "
+      -> proper splitters know abbreviations: nltk, spaCy, pysbd
+    - no CLEANING step: every chunk starts with "33 Technology Report 2025" (page number + header),
+      and the table of contents gets indexed -> noise in EVERY strategy
+  More robust order:  PDF -> clean text (headers/footers/TOC) -> good sentence splitter -> chunking
+
 ## TODO (later)
 - [ ] Embedding eval: script like evals/compare_rerankers.py, 10-20 HARD questions with known pages, compare models on Hit@3 + MRR
 - [ ] Reranker eval: questions were too easy (no rerank already 100%) -> write harder ones; check why bge-reranker-base was slow (~36 s/question) and missed the quantum question
 - [ ] Read through utils/image_parsing.py code line by line
 - [ ] Image prompt: ask for approximate values of labeled data points (e.g. GPT-4 ~ 10^25 FLOP)
 - [ ] Frontend: show **bold** Markdown in answers instead of literal asterisks
-- [ ] Commit points 1-4 (decide: branch or main)
+- [x] Commit points 1-4 (pushed to main as 1f47072)
 - [x] Add vector_store/ to .gitignore (ChromaDB data folder)
-- [ ] Semantic chunking fix: (1) replace dot leaders ". . . ." with an ellipsis before sentence split (TOC pages made 5-char chunks), (2) merge chunks < min_chunk_size into the previous chunk on the same page. Then re-run python -m evals.chunking_demo
-- [ ] Semantic max_chunk_size (1500) is bigger than MiniLM reads (~1000) -> use BGE/OpenAI with semantic, or lower the max
+- [ ] Cleaning step before chunking: remove repeated page headers/footers ("33 Technology Report 2025") and the table of contents
+- [ ] Better sentence splitter (nltk / spaCy / pysbd) so "e.g. " and "U.S. " don't end a sentence
+- [x] Semantic chunking fix: (1) replace dot leaders ". . . ." with an ellipsis before sentence split (TOC pages made 5-char chunks), (2) merge chunks < min_chunk_size into the previous chunk on the same page. Then re-run python -m evals.chunking_demo
+- [x] Semantic max_chunk_size (1500) is bigger than MiniLM reads (~1000) -> fix 3: max size now comes from the embedding model
+- [ ] (optional) Fix 4: 2 chart chunks still too long for MiniLM -> cut over-long "sentences" with recursive chunking, use 3 chars/token
 - [ ] Point 3: test strategies in the app with the same question; write chunking notes
 - [ ] Point 4: rerankers (Cohere vs open-source)

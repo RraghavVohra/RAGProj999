@@ -70,3 +70,15 @@ print(f"  page-wise  {stats(pages)}")
 print(f"  character  {stats(character)}")
 print(f"  recursive  {stats(recursive)}")
 print(f"  semantic   {stats(semantic)}")
+
+# --- Part 5 -------------------------------------------------------------------
+print("\n" + "=" * 100)
+print("PART 5   Does every semantic chunk FIT in what MiniLM can read? (real token count)")
+print("=" * 100)
+tokenizer = embedder.model.tokenizer
+token_counts = [len(tokenizer(c.text)["input_ids"]) for c in semantic]
+too_long = sum(1 for n in token_counts if n > embedder.max_tokens)
+print(f"  model reads        : {embedder.max_tokens} tokens")
+print(f"  biggest chunk      : {max(token_counts)} tokens")
+print(f"  chunks cut off     : {too_long} of {len(semantic)}")
+print("  -> 0 cut off = the model sees every chunk completely")

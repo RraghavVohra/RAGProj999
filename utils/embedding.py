@@ -84,6 +84,7 @@ class SentenceTransformerEmbedder:
         self.query_prefix = settings.get("query_prefix", "")
         self.doc_prefix = settings.get("doc_prefix", "")
         self.model = load_sentence_transformer(model_name)
+        self.max_tokens = self.model.max_seq_length   # how much the model reads; the rest is silently cut off
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         # normalize = every vector gets length 1, so cosine similarity is just a dot product
@@ -102,6 +103,7 @@ class OpenAIEmbedder:
     def __init__(self, model_name: str = "text-embedding-3-small"):
         self.model_name = model_name
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.max_tokens = 8191   # OpenAI's limit for its embedding models
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         response = self.client.embeddings.create(model=self.model_name, input=texts)
