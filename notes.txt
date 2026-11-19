@@ -146,6 +146,66 @@ OTHER WAYS (not used here)
 
 ## chunking  (utils/chunking.py)
 
+WHY IT MATTERS
+The LLM only sees the chunks retrieval finds. Badly cut chunks (mid-sentence, two topics mixed,
+answer split in half) -> worse retrieval -> worse answer.
+
+THE 4 STRATEGIES
+  page-wise  : 1 chunk per page. Simple, good citations. Chunks are long (avg ~1800 chars) and mix topics.
+  character  : cut every N chars, repeat `overlap` chars. Cuts mid-word ("(Amazo" / "ng: lots of").
+  recursive  : try to cut at paragraph -> line -> sentence -> word -> character, then glue pieces up to N chars.
+               Clean borders ("...their businesses." / "Will AI change that?").
+               Overlap = whole pieces only -> with overlap 50 there was NO real overlap (lines > 50 chars), see fix 5.
+  semantic   : split into sentences, embed each (with its neighbours), cut where the meaning jumps most.
+               breakpoint_percentile 90 = cut at the 10% biggest jumps (lower = more, smaller chunks).
+               Never across pages; max size comes from the embedding model (fix 3).
+
+HOW WE TESTED  (evals/)
+  python -m evals.chunking_demo       -> see how each strategy cuts (borders, sizes, token fit)
+  python -m evals.chunking_retrieval  -> 3 questions, top 3 chunks per strategy (first quick look)
+  python -m evals.chunking_eval       -> THE full test: 9 setups x 2 embedders x 22 questions
+    - answer key = answer phrase; the script finds EVERY page containing it (reports repeat facts)
+    - question kinds: top / middle / END of a long page (7) / chart (3) / paraphrase (4)
+    - Hit@k = answer inside a top-k chunk, MRR = how high, end@3 = only end-of-page questions,
+      ctx = characters in the top 3 chunks (what the LLM must read)
+
+RESULTS  (no reranker, 22 questions -> 1 question = ~4.5%, small gaps are noise)
+  MiniLM               Hit@1 Hit@3 Hit@5  MRR  end@3   ctx      BGE small            Hit@1 Hit@3 Hit@5  MRR  end@3   ctx
+  page-wise              50%   64%   77% 0.59    29%  5446      page-wise              73%   91%   91% 0.81    86%  6369
+  character 500          50%   77%   86% 0.63   100%  1387      character 500          64%   82%   82% 0.71    86%  1353
+  recursive 300          59%   73%   73% 0.66    71%   702      recursive 300          64%   77%   86% 0.72    57%   706
+  recursive 500          50%   73%   77% 0.61    71%  1268      recursive 500          64%   73%   82% 0.69    57%  1275
+  recursive 800          59%   68%   77% 0.65    57%  2049      recursive 500/150      73%   77%   82% 0.76    71%  1278
+  semantic 80            68%   77%   77% 0.73    71%  1754      recursive 800          59%   77%   82% 0.69    43%  2016
+  semantic 90            64%   77%   77% 0.70    71%  1816      semantic 80            59%   82%   95% 0.73    57%  2793
+  semantic 95            64%   73%   73% 0.68    57%  1882      semantic 90            64%   77%   91% 0.73    57%  3122
+                                                                semantic 95            59%   77%   86% 0.69    43%  3434
+
+WHAT WE LEARNED
+1. The embedding model matters as much as chunking: BGE ~80% avg Hit@3 vs MiniLM ~73%.
+   Paraphrase "How quickly did the price of o3 fall?" (report: "dropped 80%"): MiniLM missed it in 6/8 setups, BGE #1 in all 8.
+2. Page-wise is NOT bad with BGE (best Hit@3 91%): the page is found by its beginning, and the LLM then gets
+   the WHOLE page, end included. With MiniLM (reads ~1000 chars) page-wise was the worst (64%, end@3 29%).
+   Price: ctx 6369 = the LLM reads ~5x more text than with character 500 -> more cost, slower, more noise.
+   (Correction: earlier I said page-wise "can't see" the end of long pages - true for the vector, not for the answer.)
+3. Overlap matters: recursive with fake overlap (50) was worse than character; overlap 150 fixed most of it (fix 5).
+4. With a reranker, Hit@5 matters more than Hit@1: the reranker reorders, it just needs the answer in the candidates.
+   Semantic 80 + BGE had the best Hit@5 (95%) at less than half the context of page-wise.
+5. Testing lesson: my first answer key was wrong (pricing is also on p.32, "22%" also on p.17).
+   Always let the script find ALL pages with the answer, and use HARD questions.
+
+APP CHECK  (BGE small + semantic 80 + Cohere rerank, the 2 questions almost every setup missed)
+  "How much old or inaccurate content may need to be removed before using AI?"
+      -> "as much as 80%", p.63 #1, rerank 0.68 (next best 0.09)                          CORRECT
+  "What is still holding back humanoid robots in handling objects?"
+      -> "dexterity and fine-motor control ... tactile sensitivity and precision", p.38   CORRECT
+      vector order had p.37 (0.72) above p.38 (0.70); the reranker moved p.38 to #1 (0.80 vs 0.58)
+
+RECOMMENDATION
+  Best for the app (with reranker) : BGE small + semantic 80
+  Cheapest / smallest context      : BGE small + character 500 (or recursive 500 with overlap 150)
+  Avoid                            : MiniLM + page-wise, recursive 800, recursive with tiny overlap
+
 FIXES
 Fix 1 - dot leaders made 5-character chunks  (split_sentences)
   Problem : semantic chunking splits text into sentences at every ". " (dot + space).
@@ -192,6 +252,21 @@ Fix 3 - semantic chunks were bigger than MiniLM can read  (semantic_max_chunk_si
             Also number-heavy text is ~3.6 chars/token, so "4 chars per token" is too optimistic there.
             Possible fix 4: cut over-long sentences with recursive chunking + use 3 chars/token.
 
+Fix 5 - recursive chunking had almost no overlap  (frontend/index.html, default overlap 50 -> 150)
+  Problem : recursive only repeats WHOLE pieces (lines) as overlap. Lines in this PDF are longer than 50 chars,
+            so with overlap 50 nothing fits -> in practice NO overlap -> a fact at a chunk border gets split.
+            Character chunking always repeats 50 chars, so it doesn't have this problem.
+  Test    : python -m evals.chunking_eval --setups "recursive 500" "recursive 500/150" "character 500"
+                                          --embedders BAAI/bge-small-en-v1.5
+                              Hit@1  Hit@3  Hit@5   MRR  end@3  chunks
+            recursive 500      64%    73%    82%   0.69   57%    337
+            recursive 500/150  73%    77%    82%   0.76   71%    406
+            character 500      64%    82%    82%   0.71   86%    332
+  Result  : overlap helps: end-of-page 57% -> 71%, best Hit@1 and MRR of the three.
+            Hit@3 still 1 question below character (= noise level with 22 questions).
+            Cost: ~20% more chunks (repeated text).
+  Fix     : default overlap in the app is now 150. (Also applies to character chunking - not tested there.)
+
 Is this the right way?
   Yes for the method: measure (min = 5) -> look at the actual bad chunks -> fix the real cause.
   Fix 2 is standard (LangChain's SemanticChunker also has a minimum size).
@@ -215,5 +290,5 @@ Is this the right way?
 - [x] Semantic chunking fix: (1) replace dot leaders ". . . ." with an ellipsis before sentence split (TOC pages made 5-char chunks), (2) merge chunks < min_chunk_size into the previous chunk on the same page. Then re-run python -m evals.chunking_demo
 - [x] Semantic max_chunk_size (1500) is bigger than MiniLM reads (~1000) -> fix 3: max size now comes from the embedding model
 - [ ] (optional) Fix 4: 2 chart chunks still too long for MiniLM -> cut over-long "sentences" with recursive chunking, use 3 chars/token
-- [ ] Point 3: test strategies in the app with the same question; write chunking notes
+- [x] Point 3: chunking fully tested (evals/chunking_eval.py + app check); notes written
 - [ ] Point 4: rerankers (Cohere vs open-source)
