@@ -50,6 +50,18 @@
         <section class="card">
           <h2 class="card-title">Pipeline settings</h2>
 
+          <!-- Parsing: how PDFs are read. Fast = PyMuPDF + cleaning (seconds), Accurate = Docling (slow first time, cached) -->
+          <div class="row">
+            <div class="row-label">Parsing<small>How PDFs are read</small></div>
+            <div class="row-control">
+              <div class="segmented">
+                <label title="PyMuPDF + cleaning rules - about 1 second, good for most PDFs"><input type="radio" name="parsing" value="fast" checked><span>Fast</span></label>
+                <label title="Docling - for many tables, multi-column or scanned PDFs"><input type="radio" name="parsing" value="accurate"><span>Accurate (Docling)</span></label>
+              </div>
+              <span class="hint-inline" id="parsingHint" hidden>Slower: ~5 s per page the first time, then cached</span>
+            </div>
+          </div>
+
           <div class="row">
             <div class="row-label">Chunking<small>How documents are split</small></div>
             <div class="row-control">

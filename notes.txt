@@ -277,6 +277,33 @@ Is this the right way?
       and the table of contents gets indexed -> noise in EVERY strategy
   More robust order:  PDF -> clean text (headers/footers/TOC) -> good sentence splitter -> chunking
 
+## document parsing  (industry standard, works for ANY pdf)
+
+WHY
+pypdf only gives raw text per page. Seen on our 2 PDFs:
+  - Bain: page number + "Technology Report 2025" glued to the start of ~70 of 77 chunks, table of contents indexed
+  - Atomic Habits: 69,238 tabs between words, small caps split ("P" + "ENGUIN"), 60 words broken across lines
+Hand-written cleaning rules only fit THESE two files. Users upload anything (charts, tables, scans, books).
+Industry standard: a LAYOUT-AWARE parser understands each page first (headers/footers, headings, paragraphs,
+tables, figures, reading order, OCR for scans), THEN chunking works on clean, structured text.
+Chosen: Docling (IBM, open-source, local, free). Downside: slow on CPU the first time -> results get cached.
+
+PLAN (one step at a time):  0 setup | 1 clean reading (Docling) | 2 proper sentence splitter (nltk)
+  | 3 sizes in tokens | 4 cut over-long "sentences" | 5 chunks may continue onto the next page
+  | 6 new strategy: chunk by section (Docling HybridChunker)
+
+STEP 0 - setup (done)
+  - .gitignore: assets/Atomic Habits*.pdf  (copyrighted book: use locally, never push to GitHub)
+  - first a DRY RUN (pip install --dry-run docling nltk) = "show what you would install, change nothing"
+    -> checked that torch 2.15.0 is NOT replaced
+  - pip install docling nltk -> ~50 new packages, 2 downgrades:
+        huggingface_hub 2.4.0 -> 1.33.0  (Docling needs < 2; sentence-transformers accepts 1.3 - 3)
+        typer 0.29.1 -> 0.27.3           (command-line helper, not used by our code)
+  - requirements.txt: docling==2.151.1, nltk==3.10.4
+    "==" = PINNING: everyone installs exactly the version we tested
+  - check: python -m evals.embedding_demo gave exactly the same numbers as before
+        (MiniLM 0.788 / 0.547 / -0.014, BGE 0.766 / 0.708 / 0.426) -> the downgrade broke nothing
+
 ## TODO (later)
 - [ ] Embedding eval: script like evals/compare_rerankers.py, 10-20 HARD questions with known pages, compare models on Hit@3 + MRR
 - [ ] Reranker eval: questions were too easy (no rerank already 100%) -> write harder ones; check why bge-reranker-base was slow (~36 s/question) and missed the quantum question

@@ -113,6 +113,7 @@ function readConfig() {
   const form = $("#configForm");
   const data = new FormData(form);
   return {
+    parsing: { mode: data.get("parsing") },   // "fast" or "accurate" (Docling)
     images: { enabled: form.images.checked },
     chunking: {
       strategy: data.get("chunking"),
@@ -185,6 +186,7 @@ function renderSummary() {
   $("#topKOut").textContent = c.retrieval.top_k;
   $("#charSettings").hidden = !["character-wise", "recursive"].includes(c.chunking.strategy);
   $("#semanticSettings").hidden = c.chunking.strategy !== "semantic";
+  $("#parsingHint").hidden = c.parsing.mode !== "accurate";   // warn that Docling is slow the first time
   $("#topN").disabled = !c.reranking.enabled;
   $("#rerankModel").disabled = !c.reranking.enabled;
   $("#rerankSettings").classList.toggle("off", !c.reranking.enabled);
@@ -266,6 +268,7 @@ function renderSidebar() {
 
   const c = state.config;
   const rows = [
+    ["Parsing", c.parsing.mode],
     ["Images", c.images.enabled ? "on" : "off"],
     ["Chunking", c.chunking.strategy],
     ["Chunks", state.numChunks ?? "-"],

@@ -9,3 +9,5 @@ fastapi
 uvicorn
 python-multipart
 pymupdf
+docling==2.151.1
+nltk==3.10.4

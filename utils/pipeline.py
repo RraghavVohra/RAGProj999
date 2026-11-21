@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from utils.chunking import Chunk, character_chunking, page_chunking, recursive_chunking, semantic_chunking
 from utils.embedding import LOCAL_MODELS, OpenAIEmbedder, SentenceTransformerEmbedder, embed_chunks
 from utils.generation import Generator
+from utils.parsing import read_pages
 from utils.reranking import make_reranker
 from utils.retrieval import Retriever
 from utils.vector_store import VectorStore
@@ -62,6 +63,10 @@ class RerankingConfig(BaseModel):
     top_n: int = Field(3, ge=1, le=20)
 
 
+class ParsingConfig(BaseModel):
+    mode: Literal["fast", "accurate"] = "fast"   # fast = PyMuPDF + cleaning (seconds), accurate = Docling (minutes, cached)
+
+
 class ImagesConfig(BaseModel):
     enabled: bool = False          # off by default: it costs one vision call per visual page (cached after the first build)
     model: str = "gpt-5.6-luna"    # must be a vision-capable OpenAI model
@@ -73,6 +78,7 @@ class GenerationConfig(BaseModel):
 
 class PipelineConfig(BaseModel):
     """The full set of settings = one object per stage. Every field has a default."""
+    parsing: ParsingConfig = Field(default_factory=ParsingConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
@@ -106,12 +112,31 @@ def split_pages(pages: list[Chunk], chunking: ChunkingConfig, embedder) -> list[
 
 def chunk_pdf(pdf_path: str | Path, config: PipelineConfig, embedder) -> list[Chunk]:
     """Split ONE PDF into chunks: text chunks (chosen strategy) + figure chunks (if image parsing is on)."""
-    pages = page_chunking(str(pdf_path))   # always start with pages: they know their page number + file name
+    # STEP 1 (document parsing): clean text per page, the USER picks how (config.parsing.mode):
+    #   before    : pages = page_chunking(str(pdf_path))  -> raw pypdf text, page numbers + headers glued into every page
+    #   "fast"    : PyMuPDF + 5 general cleaning rules (repeated headers/footers, page numbers, broken words, ...)
+    #               ~1 second for a whole book. Refuses scanned PDFs with a clear message.
+    #   "accurate": Docling (layout-aware AI parser): keeps only the real content, tables as tables,
+    #               reads scanned pages. ~5 s per page the first time, then loaded from cache/docling/.
+    #   (details: utils/parsing.py)
+    # We still start with pages: they know their page number + file name.
+    pages = read_pages(pdf_path, config.parsing.mode)
 
     figures = []
     if config.images.enabled:
         from utils.image_parsing import parse_visual_pages   # imported here: only needed when images are on
         scanned_pages, figures = parse_visual_pages(pdf_path, config.images.model)
+
+        # Avoid DUPLICATE text for scanned pages (a scanned page = a photo of paper, no real text inside).
+        # Two parts of the app can now read such a page:
+        #   1. Docling, with its built-in OCR (free)  -> already inside `pages`
+        #   2. image parsing, with the OpenAI vision model (when the Images switch is on) -> `scanned_pages`
+        # If both were kept, the page's text would be stored twice and show up twice in search results.
+        # Rule: if Docling already got text from a page, ignore image parsing's transcription of that page.
+        # (Chart descriptions in `figures` are NOT affected - they are still added below.)
+        pages_docling_read = {p.metadata["page"] for p in pages}
+        scanned_pages = [p for p in scanned_pages if p.metadata["page"] not in pages_docling_read]
+
         pages = sorted(pages + scanned_pages, key=lambda p: p.metadata["page"])   # scanned text joins normal text
 
     chunks = split_pages(pages, config.chunking, embedder)
